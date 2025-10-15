@@ -3,6 +3,38 @@ local utils = require("sops_edit.utils")
 
 local M = {}
 
+local function setup_luarocks_path()
+	local home = os.getenv("HOME")
+	if not home then
+		return
+	end
+
+	local lua_version = _VERSION:match("Lua (%d+%.%d+)")
+	if not lua_version then
+		return
+	end
+
+	local versions = { lua_version, "5.4", "5.3", "5.2", "5.1" }
+	for _, version in ipairs(versions) do
+		local luarocks_share = home .. "/.luarocks/share/lua/" .. version
+		local luarocks_lib = home .. "/.luarocks/lib/lua/" .. version
+		package.path = luarocks_share .. "/?.lua;" .. luarocks_share .. "/?/init.lua;" .. package.path
+		package.cpath = luarocks_lib .. "/?.so;" .. package.cpath
+	end
+end
+
+local lyaml = nil
+pcall(function()
+	setup_luarocks_path()
+	lyaml = require("lyaml")
+end)
+
+local toml = nil
+pcall(function()
+	setup_luarocks_path()
+	toml = require("tinytoml")
+end)
+
 local KEY_TYPE_SPECS = {
 	age = { field = "recipient", flag = "--age" },
 	kms = { field = "arn", flag = "--kms" },
@@ -12,49 +44,34 @@ local KEY_TYPE_SPECS = {
 	hc_vault_transit = { field = "vault_address", flag = "--hc-vault-transit" },
 }
 
-local function parse_key_type_yaml(sops_section, key_type, field_name)
-	local section = sops_section:match(key_type .. ":(.-)%s*\n    [a-z_]+:")
-		or sops_section:match(key_type .. ":(.-)$")
-	if not section then
-		return nil
-	end
-
-	local values = {}
-	for value in section:gmatch(field_name .. ":%s*([^\n]+)") do
-		value = value:gsub("^%s+", ""):gsub("%s+$", ""):gsub("^['\"]", ""):gsub("['\"]$", "")
-		if value ~= "" then
-			table.insert(values, value)
-		end
-	end
-
-	return #values > 0 and values or nil
-end
-
-local function parse_key_type_json(sops_section, key_type, field_name)
-	local array = sops_section:match('"' .. key_type .. '"%s*:%s*(%b[])')
-	if not array or array == "[]" then
-		return nil
-	end
-
-	local values = {}
-	for value in array:gmatch('"' .. field_name .. '"%s*:%s*"([^"]+)"') do
-		table.insert(values, value)
-	end
-
-	return #values > 0 and values or nil
-end
-
 local function parse_yaml_sops_metadata(content)
-	local sops_section = content:match("\nsops:(.-)\n[^\n%s]") or content:match("\nsops:(.+)$")
-	if not sops_section then
+	if not lyaml then
+		return nil
+	end
+
+	local ok, docs = pcall(lyaml.load, content)
+	if not ok or not docs then
+		return nil
+	end
+
+	local doc = type(docs) == "table" and docs[1] or docs
+	if not doc or not doc.sops then
 		return nil
 	end
 
 	local keys = {}
 	for key_type, spec in pairs(KEY_TYPE_SPECS) do
-		local values = parse_key_type_yaml(sops_section, key_type, spec.field)
-		if values then
-			keys[key_type] = values
+		local key_section = doc.sops[key_type]
+		if key_section and type(key_section) == "table" then
+			local values = {}
+			for _, entry in ipairs(key_section) do
+				if type(entry) == "table" and entry[spec.field] then
+					table.insert(values, entry[spec.field])
+				end
+			end
+			if #values > 0 then
+				keys[key_type] = values
+			end
 		end
 	end
 
@@ -62,31 +79,140 @@ local function parse_yaml_sops_metadata(content)
 end
 
 local function parse_json_sops_metadata(content)
-	local sops_section = content:match('"sops"%s*:%s*({.-})[,}]%s*$')
-	if not sops_section then
+	local ok, data = pcall(vim.json.decode, content)
+	if not ok or not data or not data.sops then
 		return nil
 	end
 
 	local keys = {}
 	for key_type, spec in pairs(KEY_TYPE_SPECS) do
-		local values = parse_key_type_json(sops_section, key_type, spec.field)
-		if values then
-			keys[key_type] = values
+		local key_section = data.sops[key_type]
+		if key_section and type(key_section) == "table" then
+			local values = {}
+			for _, entry in ipairs(key_section) do
+				if type(entry) == "table" and entry[spec.field] then
+					table.insert(values, entry[spec.field])
+				end
+			end
+			if #values > 0 then
+				keys[key_type] = values
+			end
 		end
 	end
 
 	return keys
 end
 
--- Extract SOPS encryption keys from an encrypted file's metadata section.
--- This allows re-encrypting files with the same recipients without needing .sops.yaml.
---
--- Process:
--- 1. Read the encrypted file from disk
--- 2. Parse YAML or JSON SOPS metadata section
--- 3. Extract age/KMS/GCP KMS/Azure Key Vault recipient identifiers
---
--- Returns: table with extracted keys, or nil if extraction fails
+local function parse_toml_sops_metadata(content, filepath)
+	if not toml then
+		return nil
+	end
+
+	local ok, data
+	if filepath then
+		ok, data = pcall(toml.parse, filepath)
+	else
+		ok, data = pcall(toml.parse, content)
+	end
+
+	if not ok or not data or not data.sops then
+		return nil
+	end
+
+	local keys = {}
+	for key_type, spec in pairs(KEY_TYPE_SPECS) do
+		local key_section = data.sops[key_type]
+		if key_section and type(key_section) == "table" then
+			local values = {}
+			for _, entry in ipairs(key_section) do
+				if type(entry) == "table" and entry[spec.field] then
+					table.insert(values, entry[spec.field])
+				end
+			end
+			if #values > 0 then
+				keys[key_type] = values
+			end
+		end
+	end
+
+	return keys
+end
+
+local function parse_comment_block_metadata(content)
+	local comment_lines = {}
+	local in_sops_block = false
+
+	for line in content:gmatch("[^\r\n]+") do
+		local comment_char, rest = line:match("^([#;])(.*)$")
+		if comment_char then
+			local stripped = rest:match("^%s*(.*)$")
+			if stripped:match("^sops:") or stripped:match("^sops%s") then
+				in_sops_block = true
+			end
+			if in_sops_block then
+				table.insert(comment_lines, rest)
+			end
+		elseif in_sops_block then
+			break
+		end
+	end
+
+	if #comment_lines == 0 then
+		return nil
+	end
+
+	local metadata_str = table.concat(comment_lines, "\n")
+
+	if lyaml then
+		local yaml_ok, yaml_data = pcall(lyaml.load, metadata_str)
+		if yaml_ok and yaml_data then
+			local doc = type(yaml_data) == "table" and yaml_data[1] or yaml_data
+			if doc and doc.sops then
+				local keys = {}
+				for key_type, spec in pairs(KEY_TYPE_SPECS) do
+					local key_section = doc.sops[key_type]
+					if key_section and type(key_section) == "table" then
+						local values = {}
+						for _, entry in ipairs(key_section) do
+							if type(entry) == "table" and entry[spec.field] then
+								table.insert(values, entry[spec.field])
+							end
+						end
+						if #values > 0 then
+							keys[key_type] = values
+						end
+					end
+				end
+				if next(keys) then
+					return keys
+				end
+			end
+		end
+	end
+
+	local json_ok, json_data = pcall(vim.json.decode, metadata_str)
+	if json_ok and json_data and json_data.sops then
+		local keys = {}
+		for key_type, spec in pairs(KEY_TYPE_SPECS) do
+			local key_section = json_data.sops[key_type]
+			if key_section and type(key_section) == "table" then
+				local values = {}
+				for _, entry in ipairs(key_section) do
+					if type(entry) == "table" and entry[spec.field] then
+						table.insert(values, entry[spec.field])
+					end
+				end
+				if #values > 0 then
+					keys[key_type] = values
+				end
+			end
+		end
+		return keys
+	end
+
+	return nil
+end
+
 local function extract_sops_keys(filepath)
 	local fd = vim.loop.fs_open(filepath, "r", tonumber("644", 8))
 	if not fd then
@@ -109,6 +235,10 @@ local function extract_sops_keys(filepath)
 	local ext = filepath:match("%.([^%.]+)$") or ""
 	if ext == "json" then
 		return parse_json_sops_metadata(content)
+	elseif ext == "toml" then
+		return parse_toml_sops_metadata(content, filepath)
+	elseif ext == "env" or ext == "ini" then
+		return parse_comment_block_metadata(content)
 	else
 		return parse_yaml_sops_metadata(content)
 	end
