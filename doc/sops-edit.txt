@@ -1,0 +1,87 @@
+*sops-edit.txt*  Transparent editing of SOPS-encrypted files
+
+Author:  https://github.com/ntauthority
+License: MIT
+
+INTRODUCTION                                    *sops-edit*
+
+sops-edit.nvim provides transparent encryption/decryption of SOPS-encrypted
+files without ever writing plaintext to disk. All operations are performed
+in-memory using stdin/stdout pipes.
+
+FEATURES ~
+
+- Automatically decrypts SOPS files on read into memory
+- Re-encrypts on write without persisting plaintext to disk
+- Disables swap, undo, backup, and modeline for security
+- Pattern-based detection of SOPS files
+- Idempotent setup (safe to call multiple times)
+
+REQUIREMENTS                                    *sops-edit-requirements*
+
+- Neovim >= 0.7.0
+- `sops` binary in $PATH (https://github.com/getsops/sops)
+
+USAGE                                           *sops-edit-usage*
+
+Add to your init.lua:
+>lua
+    require('sops_edit').setup({
+        sops_patterns = {
+            "%.sops%.ya?ml$",
+            "%.sops%.json$",
+            "%.sops%.toml$",
+            "%.sops%.env$",
+        },
+        verbose = false,
+    })
+<
+
+CONFIGURATION                                   *sops-edit-config*
+
+`sops_patterns`                                 *sops-edit-config-sops_patterns*
+    List of Lua patterns matching filenames that should be treated as
+    SOPS-encrypted files.
+    Default: >lua
+        {
+            "%.sops%.ya?ml$",
+            "%.sops%.json$",
+            "%.sops%.toml$",
+            "%.sops%.env$",
+        }
+<
+
+`verbose`                                       *sops-edit-config-verbose*
+    Enable verbose notifications for debugging.
+    Default: `false`
+
+SECURITY MODEL                                  *sops-edit-security*
+
+sops-edit.nvim implements multiple layers of protection to prevent plaintext
+secrets from being written to disk:
+
+1. Buffer type set to `acwrite` (no automatic disk writes)
+2. Swap file disabled (`noswapfile`)
+3. Undo file disabled (`noundofile`)
+4. Backup files disabled (`nobackup`, `nowritebackup`)
+5. Modelines disabled (`nomodeline`)
+
+IMPORTANT: Users should still exercise caution:
+- Avoid `:w !command` or `:saveas` which bypass buffer protections
+- Be aware of session files and viminfo/shada persistence
+- Review system-level crash dumps and core files
+- Ensure SOPS keys are properly secured
+
+LIMITATIONS                                     *sops-edit-limitations*
+
+- Only works with files matching configured patterns
+- Requires `sops` binary in $PATH
+- Does not preserve SOPS metadata comments (uses SOPS re-encryption)
+- Synchronous encryption/decryption (may block on large files)
+
+ABOUT                                           *sops-edit-about*
+
+Find the latest version and report issues at:
+https://github.com/ntauthority/sops-edit.nvim
+
+ vim:tw=78:et:ft=help:norl:
