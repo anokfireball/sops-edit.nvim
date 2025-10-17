@@ -38,6 +38,9 @@ function M.decrypt_buffer(args)
 	vim.opt_local.writebackup = false
 	vim.bo[args.buf].modeline = false
 
+	vim.o.shada = ""
+	vim.o.viminfo = ""
+
 	local buf_group = vim.api.nvim_create_augroup("SopsEditBuf" .. args.buf, { clear = true })
 	vim.api.nvim_create_autocmd("BufWriteCmd", {
 		group = buf_group,
@@ -49,8 +52,51 @@ function M.decrypt_buffer(args)
 		desc = "Encrypt SOPS buffer on write",
 	})
 
+	vim.api.nvim_create_autocmd("BufUnload", {
+		group = buf_group,
+		buffer = args.buf,
+		callback = function()
+			vim.fn.setreg('"', "")
+			vim.fn.setreg("0", "")
+			vim.fn.setreg("1", "")
+			vim.fn.setreg("2", "")
+			vim.fn.setreg("3", "")
+			vim.fn.setreg("4", "")
+			vim.fn.setreg("5", "")
+			vim.fn.setreg("6", "")
+			vim.fn.setreg("7", "")
+			vim.fn.setreg("8", "")
+			vim.fn.setreg("9", "")
+			vim.fn.setreg("-", "")
+			vim.fn.setreg(".", "")
+			vim.fn.setreg(":", "")
+			for i = 97, 122 do
+				vim.fn.setreg(string.char(i), "")
+			end
+			collectgarbage("collect")
+		end,
+		desc = "Clear registers when SOPS buffer is unloaded",
+	})
+
 	local lines = vim.split(stdout, "\n")
+
+	local stdout_len = #stdout
+	stdout = string.rep("\0", stdout_len)
+	stdout = nil
+
 	vim.api.nvim_buf_set_lines(args.buf, 0, -1, false, lines)
+
+	for i = 1, #lines do
+		local line_len = #lines[i]
+		lines[i] = string.rep("\0", line_len)
+	end
+	for i = 1, #lines do
+		lines[i] = nil
+	end
+	lines = nil
+
+	collectgarbage("collect")
+
 	vim.bo[args.buf].modified = false
 
 	if config.options.verbose then
