@@ -261,8 +261,10 @@ local function extract_sops_keys(filepath)
 		return parse_env_sops_metadata(content)
 	elseif ext == "ini" then
 		return parse_ini_sops_metadata(content)
-	else
+	elseif ext == "yaml" or ext == "yml" then
 		return parse_yaml_sops_metadata(content)
+	else
+		return nil
 	end
 end
 
@@ -323,17 +325,16 @@ function M.encrypt_buffer(args)
 	local input_type = format_map[ext]
 
 	if not input_type then
-		if config.options.verbose then
-			vim.notify(
-				string.format(
-					"Unknown file extension '.%s' for %s, defaulting to yaml",
-					ext,
-					vim.fn.fnamemodify(filepath, ":~")
-				),
-				vim.log.levels.WARN
-			)
-		end
-		input_type = "yaml"
+		secure_cleanup()
+		vim.notify(
+			string.format(
+				"Error: Unknown file extension '.%s' for %s. Supported: json, toml, yaml, yml, env, ini",
+				ext,
+				vim.fn.fnamemodify(filepath, ":~")
+			),
+			vim.log.levels.ERROR
+		)
+		return
 	end
 
 	local ALLOWED_INPUT_TYPES = {

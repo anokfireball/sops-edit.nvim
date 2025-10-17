@@ -46,6 +46,14 @@ function M.get_autocommand_pattern()
 			table.insert(patterns, "*.sops.env")
 		elseif lua_pattern == "%.sops%.ini$" then
 			table.insert(patterns, "*.sops.ini")
+		else
+			vim.notify(
+				string.format(
+					"Warning: Unknown SOPS pattern '%s' in sops_patterns config - cannot convert to autocommand pattern",
+					lua_pattern
+				),
+				vim.log.levels.WARN
+			)
 		end
 	end
 	return table.concat(patterns, ",")
