@@ -3,37 +3,69 @@ local utils = require("sops_edit.utils")
 
 local M = {}
 
-local function setup_luarocks_path()
-	local home = os.getenv("HOME")
-	if not home then
-		return
-	end
-
-	local lua_version = _VERSION:match("Lua (%d+%.%d+)")
-	if not lua_version then
-		return
-	end
-
-	local versions = { lua_version, "5.4", "5.3", "5.2", "5.1" }
-	for _, version in ipairs(versions) do
-		local luarocks_share = home .. "/.luarocks/share/lua/" .. version
-		local luarocks_lib = home .. "/.luarocks/lib/lua/" .. version
-		package.path = luarocks_share .. "/?.lua;" .. luarocks_share .. "/?/init.lua;" .. package.path
-		package.cpath = luarocks_lib .. "/?.so;" .. package.cpath
-	end
-end
-
 local lyaml = nil
-pcall(function()
-	setup_luarocks_path()
-	lyaml = require("lyaml")
-end)
+local lyaml_load_attempted = false
 
-local toml = nil
-pcall(function()
-	setup_luarocks_path()
-	toml = require("tinytoml")
-end)
+local function get_lyaml()
+	if lyaml then
+		return lyaml
+	end
+	if lyaml_load_attempted then
+		return nil
+	end
+
+	lyaml_load_attempted = true
+
+	local ok = pcall(function()
+		lyaml = require("lyaml")
+	end)
+	if ok then
+		return lyaml
+	end
+
+	ok = pcall(require, "luarocks.loader")
+	if ok then
+		ok = pcall(function()
+			lyaml = require("lyaml")
+		end)
+		if ok then
+			return lyaml
+		end
+	end
+
+	local home = os.getenv("HOME")
+	if home then
+		local lua_ver = _VERSION:match("Lua (%d+%.%d+)")
+		if lua_ver then
+			local share = home .. "/.luarocks/share/lua/" .. lua_ver
+			local lib = home .. "/.luarocks/lib/lua/" .. lua_ver
+
+			local ext = "so"
+			if jit and jit.os then
+				ext = jit.os:find("Windows") and "dll" or "so"
+			end
+
+			local new_path = share .. "/?.lua;" .. share .. "/?/init.lua"
+			if not package.path:find(new_path, 1, true) then
+				package.path = package.path .. ";" .. new_path
+			end
+
+			local new_cpath = lib .. "/?." .. ext
+			if not package.cpath:find(lib, 1, true) then
+				package.cpath = package.cpath .. ";" .. new_cpath
+			end
+
+			ok = pcall(function()
+				lyaml = require("lyaml")
+			end)
+			if ok then
+				return lyaml
+			end
+		end
+	end
+
+	return nil
+end
 
 local KEY_TYPE_SPECS = {
 	age = { field = "recipient", flag = "--age" },
@@ -45,11 +77,12 @@ local KEY_TYPE_SPECS = {
 }
 
 local function parse_yaml_sops_metadata(content)
-	if not lyaml then
+	local yaml = get_lyaml()
+	if not yaml then
 		return nil
 	end
 
-	local ok, docs = pcall(lyaml.load, content)
+	local ok, docs = pcall(yaml.load, content)
 	if not ok or not docs then
 		return nil
 	end
@@ -103,18 +136,8 @@ local function parse_json_sops_metadata(content)
 	return keys
 end
 
-local function parse_toml_sops_metadata(content, filepath)
-	if not toml then
-		return nil
-	end
-
-	local ok, data
-	if filepath then
-		ok, data = pcall(toml.parse, filepath)
-	else
-		ok, data = pcall(toml.parse, content)
-	end
-
+local function parse_toml_sops_metadata(content)
+	local ok, data = pcall(vim.json.decode, content)
 	if not ok or not data or not data.sops then
 		return nil
 	end
@@ -138,79 +161,76 @@ local function parse_toml_sops_metadata(content, filepath)
 	return keys
 end
 
-local function parse_comment_block_metadata(content)
-	local comment_lines = {}
-	local in_sops_block = false
+local function parse_env_sops_metadata(content)
+	local keys = {}
+
+	for key_type, spec in pairs(KEY_TYPE_SPECS) do
+		local recipients = {}
+		local prefix = "sops_" .. key_type .. "__list_"
+
+		for line in content:gmatch("[^\r\n]+") do
+			local key, value = line:match("^([^=]+)=(.*)$")
+			if key and value then
+				key = key:gsub("^%s*(.-)%s*$", "%1")
+				value = value:gsub("^%s*(.-)%s*$", "%1")
+				if key:match("^" .. prefix .. "%d+__map_" .. spec.field .. "$") then
+					table.insert(recipients, value)
+				end
+			end
+		end
+
+		if #recipients > 0 then
+			keys[key_type] = recipients
+		end
+	end
+
+	return next(keys) and keys or nil
+end
+
+local function parse_ini_sops_metadata(content)
+	local keys = {}
+	local in_sops_section = false
 
 	for line in content:gmatch("[^\r\n]+") do
-		local comment_char, rest = line:match("^([#;])(.*)$")
-		if comment_char then
-			local stripped = rest:match("^%s*(.*)$")
-			if stripped:match("^sops:") or stripped:match("^sops%s") then
-				in_sops_block = true
-			end
-			if in_sops_block then
-				table.insert(comment_lines, rest)
-			end
-		elseif in_sops_block then
-			break
-		end
-	end
+		local section = line:match("^%[(.-)%]$")
+		if section then
+			in_sops_section = (section == "sops")
+		elseif in_sops_section then
+			local key, value = line:match("^([^=]+)=(.*)$")
+			if key and value then
+				key = key:gsub("^%s*(.-)%s*$", "%1")
+				value = value:gsub("^%s*(.-)%s*$", "%1")
 
-	if #comment_lines == 0 then
-		return nil
-	end
-
-	local metadata_str = table.concat(comment_lines, "\n")
-
-	if lyaml then
-		local yaml_ok, yaml_data = pcall(lyaml.load, metadata_str)
-		if yaml_ok and yaml_data then
-			local doc = type(yaml_data) == "table" and yaml_data[1] or yaml_data
-			if doc and doc.sops then
-				local keys = {}
 				for key_type, spec in pairs(KEY_TYPE_SPECS) do
-					local key_section = doc.sops[key_type]
-					if key_section and type(key_section) == "table" then
-						local values = {}
-						for _, entry in ipairs(key_section) do
-							if type(entry) == "table" and entry[spec.field] then
-								table.insert(values, entry[spec.field])
-							end
+					local pattern = "^" .. key_type .. "__list_(%d+)__map_" .. spec.field .. "$"
+					local index = key:match(pattern)
+					if index then
+						if not keys[key_type] then
+							keys[key_type] = {}
 						end
-						if #values > 0 then
-							keys[key_type] = values
-						end
+						local idx = tonumber(index) + 1
+						keys[key_type][idx] = value
 					end
-				end
-				if next(keys) then
-					return keys
 				end
 			end
 		end
 	end
 
-	local json_ok, json_data = pcall(vim.json.decode, metadata_str)
-	if json_ok and json_data and json_data.sops then
-		local keys = {}
-		for key_type, spec in pairs(KEY_TYPE_SPECS) do
-			local key_section = json_data.sops[key_type]
-			if key_section and type(key_section) == "table" then
-				local values = {}
-				for _, entry in ipairs(key_section) do
-					if type(entry) == "table" and entry[spec.field] then
-						table.insert(values, entry[spec.field])
-					end
-				end
-				if #values > 0 then
-					keys[key_type] = values
-				end
-			end
+	for key_type, recipients in pairs(keys) do
+		local indices = {}
+		for idx in pairs(recipients) do
+			table.insert(indices, idx)
 		end
-		return keys
+		table.sort(indices)
+
+		local compact = {}
+		for _, idx in ipairs(indices) do
+			table.insert(compact, recipients[idx])
+		end
+		keys[key_type] = compact
 	end
 
-	return nil
+	return next(keys) and keys or nil
 end
 
 local function extract_sops_keys(filepath)
@@ -232,13 +252,15 @@ local function extract_sops_keys(filepath)
 		return nil
 	end
 
-	local ext = filepath:match("%.([^%.]+)$") or ""
+	local ext = (filepath:match("%.([^%.]+)$") or ""):lower()
 	if ext == "json" then
 		return parse_json_sops_metadata(content)
 	elseif ext == "toml" then
-		return parse_toml_sops_metadata(content, filepath)
-	elseif ext == "env" or ext == "ini" then
-		return parse_comment_block_metadata(content)
+		return parse_toml_sops_metadata(content)
+	elseif ext == "env" then
+		return parse_env_sops_metadata(content)
+	elseif ext == "ini" then
+		return parse_ini_sops_metadata(content)
 	else
 		return parse_yaml_sops_metadata(content)
 	end
@@ -268,11 +290,12 @@ function M.encrypt_buffer(args)
 	local buffer_lines = vim.api.nvim_buf_get_lines(args.buf, 0, -1, false)
 	local full_plaintext = table.concat(buffer_lines, "\n") .. "\n"
 
-	local ext = filepath:match("%.([^%.]+)$") or ""
+	local ext = (filepath:match("%.([^%.]+)$") or ""):lower()
 	local format_map = {
 		json = "json",
 		toml = "toml",
 		env = "dotenv",
+		ini = "ini",
 		yml = "yaml",
 		yaml = "yaml",
 	}
@@ -292,6 +315,21 @@ function M.encrypt_buffer(args)
 		input_type = "yaml"
 	end
 
+	local ALLOWED_INPUT_TYPES = {
+		json = true,
+		toml = true,
+		dotenv = true,
+		yaml = true,
+		ini = true,
+	}
+	if not ALLOWED_INPUT_TYPES[input_type] then
+		vim.notify(
+			string.format("Security: Invalid input type '%s' for %s", input_type, vim.fn.fnamemodify(filepath, ":~")),
+			vim.log.levels.ERROR
+		)
+		return
+	end
+
 	local keys = extract_sops_keys(filepath)
 	local key_flags = ""
 
@@ -308,8 +346,8 @@ function M.encrypt_buffer(args)
 	if key_flags ~= "" then
 		cmd = string.format(
 			"cat | sops --config /dev/null --encrypt --input-type %s --output-type %s%s /dev/stdin",
-			input_type,
-			input_type,
+			vim.fn.shellescape(input_type),
+			vim.fn.shellescape(input_type),
 			key_flags
 		)
 		if config.options.verbose then
@@ -318,8 +356,8 @@ function M.encrypt_buffer(args)
 	else
 		cmd = string.format(
 			"cat | sops --encrypt --input-type %s --output-type %s --filename-override %s /dev/stdin",
-			input_type,
-			input_type,
+			vim.fn.shellescape(input_type),
+			vim.fn.shellescape(input_type),
 			vim.fn.shellescape(filepath)
 		)
 		if config.options.verbose then
@@ -341,10 +379,11 @@ function M.encrypt_buffer(args)
 	local uv = vim.loop
 	local stat = uv.fs_stat(filepath)
 	local original_mode = stat and stat.mode or tonumber("600", 8)
+	local safe_mode = tonumber("600", 8)
 
-	local tmp_filepath = filepath .. ".sops.tmp"
+	local tmp_filepath = filepath .. ".sops." .. uv.hrtime() .. ".tmp"
 
-	local fd = uv.fs_open(tmp_filepath, "w", original_mode)
+	local fd = uv.fs_open(tmp_filepath, "w", safe_mode)
 	if not fd then
 		vim.notify(
 			string.format("Error: Could not create temporary file %s", vim.fn.fnamemodify(tmp_filepath, ":~")),
@@ -379,6 +418,10 @@ function M.encrypt_buffer(args)
 			vim.log.levels.ERROR
 		)
 		return
+	end
+
+	if stat then
+		uv.fs_chmod(filepath, original_mode)
 	end
 
 	vim.bo[args.buf].modified = false
