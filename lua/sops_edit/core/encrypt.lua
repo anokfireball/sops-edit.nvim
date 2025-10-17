@@ -136,31 +136,6 @@ local function parse_json_sops_metadata(content)
 	return recipients_by_type
 end
 
-local function parse_toml_sops_metadata(content)
-	local success, data = pcall(vim.json.decode, content)
-	if not success or not data or not data.sops then
-		return nil
-	end
-
-	local recipients_by_type = {}
-	for key_type, spec in pairs(KEY_TYPE_SPECS) do
-		local key_section = data.sops[key_type]
-		if key_section and type(key_section) == "table" then
-			local recipient_values = {}
-			for _, entry in ipairs(key_section) do
-				if type(entry) == "table" and entry[spec.field] then
-					table.insert(recipient_values, entry[spec.field])
-				end
-			end
-			if #recipient_values > 0 then
-				recipients_by_type[key_type] = recipient_values
-			end
-		end
-	end
-
-	return recipients_by_type
-end
-
 local function parse_env_sops_metadata(content)
 	local recipients_by_type = {}
 
@@ -255,8 +230,6 @@ local function extract_sops_keys(filepath)
 	local file_extension = (filepath:match("%.([^%.]+)$") or ""):lower()
 	if file_extension == "json" then
 		return parse_json_sops_metadata(content)
-	elseif file_extension == "toml" then
-		return parse_toml_sops_metadata(content)
 	elseif file_extension == "env" then
 		return parse_env_sops_metadata(content)
 	elseif file_extension == "ini" then
@@ -316,7 +289,6 @@ function M.encrypt_buffer(args)
 	local file_extension = (filepath:match("%.([^%.]+)$") or ""):lower()
 	local format_map = {
 		json = "json",
-		toml = "toml",
 		env = "dotenv",
 		ini = "ini",
 		yml = "yaml",
@@ -328,7 +300,7 @@ function M.encrypt_buffer(args)
 		secure_cleanup()
 		vim.notify(
 			string.format(
-				"Error: Unknown file extension '.%s' for %s. Supported: json, toml, yaml, yml, env, ini",
+				"Error: Unknown file extension '.%s' for %s. Supported: json, yaml, yml, env, ini",
 				file_extension,
 				vim.fn.fnamemodify(filepath, ":~")
 			),
@@ -339,7 +311,6 @@ function M.encrypt_buffer(args)
 
 	local ALLOWED_INPUT_TYPES = {
 		json = true,
-		toml = true,
 		dotenv = true,
 		yaml = true,
 		ini = true,
@@ -428,16 +399,6 @@ function M.encrypt_buffer(args)
 
 	uv.fs_fsync(file_handle)
 	uv.fs_close(file_handle)
-		uv.fs_unlink(tmp_filepath)
-		vim.notify(
-			string.format("Error: Could not write to temporary file %s", vim.fn.fnamemodify(tmp_filepath, ":~")),
-			vim.log.levels.ERROR
-		)
-		return
-	end
-
-	uv.fs_fsync(fd)
-	uv.fs_close(fd)
 
 	local rename_ok, rename_err = uv.fs_rename(tmp_filepath, filepath)
 	if not rename_ok then
