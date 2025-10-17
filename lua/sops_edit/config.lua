@@ -6,6 +6,7 @@ M.defaults = {
 		"%.sops%.json$",
 		"%.sops%.toml$",
 		"%.sops%.env$",
+		"%.sops%.ini$",
 	},
 	verbose = false,
 }
@@ -43,6 +44,8 @@ function M.get_autocommand_pattern()
 			table.insert(patterns, "*.sops.toml")
 		elseif lua_pattern == "%.sops%.env$" then
 			table.insert(patterns, "*.sops.env")
+		elseif lua_pattern == "%.sops%.ini$" then
+			table.insert(patterns, "*.sops.ini")
 		end
 	end
 	return table.concat(patterns, ",")
