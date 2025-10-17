@@ -4,7 +4,7 @@ local utils = require("sops_edit.utils")
 local M = {}
 
 function M.decrypt_buffer(args)
-	local filepath = vim.fn.fnamemodify(args.file, ":p")
+	local filepath = utils.normalize_path_abs(args.file)
 
 	if not config.is_sops_file(filepath) then
 		return
@@ -15,7 +15,7 @@ function M.decrypt_buffer(args)
 	end
 
 	if config.options.verbose then
-		vim.notify("Decrypting SOPS file: " .. vim.fn.fnamemodify(filepath, ":~"), vim.log.levels.INFO)
+		vim.notify("Decrypting SOPS file: " .. utils.normalize_path_display(filepath), vim.log.levels.INFO)
 	end
 
 	local cmd = string.format("sops -d %s", vim.fn.shellescape(filepath))
@@ -23,7 +23,7 @@ function M.decrypt_buffer(args)
 
 	if not success then
 		vim.notify(
-			string.format("SOPS decryption failed for %s:\n%s", vim.fn.fnamemodify(filepath, ":~"), error_msg),
+			string.format("SOPS decryption failed for %s:\n%s", utils.normalize_path_display(filepath), error_msg),
 			vim.log.levels.ERROR
 		)
 		return
@@ -56,46 +56,19 @@ function M.decrypt_buffer(args)
 		group = buf_group,
 		buffer = args.buf,
 		callback = function()
-			pcall(function()
-				vim.fn.setreg('"', "")
-				vim.fn.setreg("0", "")
-				vim.fn.setreg("1", "")
-				vim.fn.setreg("2", "")
-				vim.fn.setreg("3", "")
-				vim.fn.setreg("4", "")
-				vim.fn.setreg("5", "")
-				vim.fn.setreg("6", "")
-				vim.fn.setreg("7", "")
-				vim.fn.setreg("8", "")
-				vim.fn.setreg("9", "")
-				vim.fn.setreg("-", "")
-				vim.fn.setreg(".", "")
-				vim.fn.setreg(":", "")
-				for i = 97, 122 do
-					vim.fn.setreg(string.char(i), "")
-				end
-				collectgarbage("collect")
-			end)
+			utils.clear_all_registers()
+			collectgarbage("collect")
 		end,
 		desc = "Clear registers when SOPS buffer is unloaded",
 	})
 
 	local lines = vim.split(output, "\n")
 
-	local output_len = #output
-	output = string.rep("\0", output_len)
-	output = nil
+	utils.secure_wipe_string(output)
 
 	vim.api.nvim_buf_set_lines(args.buf, 0, -1, false, lines)
 
-	for i = 1, #lines do
-		local line_len = #lines[i]
-		lines[i] = string.rep("\0", line_len)
-	end
-	for i = 1, #lines do
-		lines[i] = nil
-	end
-	lines = nil
+	utils.secure_wipe_table_strings(lines)
 
 	collectgarbage("collect")
 
