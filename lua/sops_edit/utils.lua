@@ -4,6 +4,11 @@ function M.execute_command(cmd, input)
 	if input then
 		local result = vim.fn.system(cmd .. " 2>&1", input)
 		local exit_code = vim.v.shell_error
+
+		local input_len = #input
+		input = string.rep("\0", input_len)
+		input = nil
+
 		if exit_code == 0 then
 			return true, result, ""
 		else

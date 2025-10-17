@@ -290,6 +290,27 @@ function M.encrypt_buffer(args)
 	local buffer_lines = vim.api.nvim_buf_get_lines(args.buf, 0, -1, false)
 	local full_plaintext = table.concat(buffer_lines, "\n") .. "\n"
 
+	local function secure_cleanup()
+		if full_plaintext then
+			local len = #full_plaintext
+			full_plaintext = string.rep("\0", len)
+			full_plaintext = nil
+		end
+
+		if buffer_lines then
+			for i = 1, #buffer_lines do
+				local line_len = #buffer_lines[i]
+				buffer_lines[i] = string.rep("\0", line_len)
+			end
+			for i = 1, #buffer_lines do
+				buffer_lines[i] = nil
+			end
+			buffer_lines = nil
+		end
+
+		collectgarbage("collect")
+	end
+
 	local ext = (filepath:match("%.([^%.]+)$") or ""):lower()
 	local format_map = {
 		json = "json",
@@ -323,6 +344,7 @@ function M.encrypt_buffer(args)
 		ini = true,
 	}
 	if not ALLOWED_INPUT_TYPES[input_type] then
+		secure_cleanup()
 		vim.notify(
 			string.format("Security: Invalid input type '%s' for %s", input_type, vim.fn.fnamemodify(filepath, ":~")),
 			vim.log.levels.ERROR
@@ -366,7 +388,7 @@ function M.encrypt_buffer(args)
 	end
 
 	local success, encrypted_output, stderr = utils.execute_command(cmd, full_plaintext)
-	full_plaintext = nil
+	secure_cleanup()
 
 	if not success then
 		vim.notify(
