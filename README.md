@@ -1,12 +1,12 @@
 # sops-edit.nvim
 
-Edit SOPS-encrypted files in Neovim safely and transparently — without ever writing plaintext to disk.
+Edit SOPS-encrypted files in Neovim safely and transparently without ever writing plaintext to disk.
 
 ## Why use this plugin?
 
 - 🔒 Safe by default: avoids common plaintext leaks (swap, undo, backups, registers, shada/viminfo, modelines) and writes only encrypted data to disk.
 - 🧠 Zero mental overhead: open, edit, and save SOPS files like any other buffer.
-- 🧭 Sensible behavior, no surprises: unknown formats and misconfigurations return clear errors — no silent fallbacks.
+- 🧭 Sensible behavior, no surprises: unknown formats and misconfigurations return clear errors, no silent fallbacks.
 - 🔑 Portable workflows: reuses recipients embedded in existing SOPS files, so you can edit files outside their original repo without a local `.sops.yaml`.
 - 🧱 Robust saves: atomic writes help prevent corruption and keep ciphertext consistent on disk.
 

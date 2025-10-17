@@ -30,7 +30,7 @@ Add to your init.lua:
         sops_patterns = {
             "%.sops%.ya?ml$",
             "%.sops%.json$",
-            "%.sops%.toml$",
+            "%.sops%.ini$",
             "%.sops%.env$",
         },
         verbose = false,
@@ -46,7 +46,7 @@ CONFIGURATION                                   *sops-edit-config*
         {
             "%.sops%.ya?ml$",
             "%.sops%.json$",
-            "%.sops%.toml$",
+            "%.sops%.ini$",
             "%.sops%.env$",
         }
 <
