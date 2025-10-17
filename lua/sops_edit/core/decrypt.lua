@@ -19,11 +19,11 @@ function M.decrypt_buffer(args)
 	end
 
 	local cmd = string.format("sops -d %s", vim.fn.shellescape(filepath))
-	local success, stdout, stderr = utils.execute_command(cmd)
+	local success, output, error_msg = utils.execute_command(cmd)
 
 	if not success then
 		vim.notify(
-			string.format("SOPS decryption failed for %s:\n%s", vim.fn.fnamemodify(filepath, ":~"), stderr),
+			string.format("SOPS decryption failed for %s:\n%s", vim.fn.fnamemodify(filepath, ":~"), error_msg),
 			vim.log.levels.ERROR
 		)
 		return
@@ -80,11 +80,11 @@ function M.decrypt_buffer(args)
 		desc = "Clear registers when SOPS buffer is unloaded",
 	})
 
-	local lines = vim.split(stdout, "\n")
+	local lines = vim.split(output, "\n")
 
-	local stdout_len = #stdout
-	stdout = string.rep("\0", stdout_len)
-	stdout = nil
+	local output_len = #output
+	output = string.rep("\0", output_len)
+	output = nil
 
 	vim.api.nvim_buf_set_lines(args.buf, 0, -1, false, lines)
 
