@@ -4,7 +4,6 @@ M.defaults = {
 	sops_patterns = {
 		"%.sops%.ya?ml$",
 		"%.sops%.json$",
-		"%.sops%.toml$",
 		"%.sops%.env$",
 		"%.sops%.ini$",
 	},
@@ -40,8 +39,6 @@ function M.get_autocommand_pattern()
 			table.insert(patterns, "*.sops.yml")
 		elseif lua_pattern == "%.sops%.json$" then
 			table.insert(patterns, "*.sops.json")
-		elseif lua_pattern == "%.sops%.toml$" then
-			table.insert(patterns, "*.sops.toml")
 		elseif lua_pattern == "%.sops%.env$" then
 			table.insert(patterns, "*.sops.env")
 		elseif lua_pattern == "%.sops%.ini$" then
